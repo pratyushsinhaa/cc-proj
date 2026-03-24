@@ -1,0 +1,7 @@
+{"ts":"2026-03-18T10:05:41.010Z","node":"replica1","term":4,"role":"leader","message":"Leader elected","votesGranted":2,"majority":2}
+{"ts":"2026-03-18T10:06:03.442Z","service":"gateway","message":"Leader discovered","id":"replica1","url":"http://replica1:5001","term":4}
+{"ts":"2026-03-18T10:06:18.010Z","node":"replica1","term":4,"role":"leader","message":"Node entering graceful shutdown"}
+{"ts":"2026-03-18T10:06:19.788Z","node":"replica2","term":5,"role":"candidate","message":"Election started","termAtStart":5}
+{"ts":"2026-03-18T10:06:20.157Z","node":"replica2","term":5,"role":"leader","message":"Leader elected","votesGranted":2,"majority":2}
+{"ts":"2026-03-18T10:06:20.901Z","service":"gateway","message":"Leader discovered","id":"replica2","url":"http://replica2:5002","term":5}
+{"ts":"2026-03-18T10:06:23.004Z","node":"replica2","term":5,"role":"leader","message":"Command appended","index":118,"type":"DRAW"}

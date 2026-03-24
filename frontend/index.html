@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MiniRAFT Canvas</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="aurora"></div>
+    <main class="app-shell">
+      <section class="panel">
+        <h1>MiniRAFT Live Board</h1>
+        <p class="subtitle">Leader election, replication, and failover visible in real time.</p>
+
+        <div class="status-row">
+          <div>
+            <span class="label">Cluster Leader</span>
+            <strong id="leader">Discovering...</strong>
+          </div>
+          <div>
+            <span class="label">Connection</span>
+            <strong id="connection">Connecting...</strong>
+          </div>
+        </div>
+
+        <div class="controls">
+          <label for="color">Stroke</label>
+          <input id="color" type="color" value="#1f2937" />
+          <button id="clear" type="button">Clear Local View</button>
+        </div>
+
+        <p class="hint">Open multiple tabs and draw at once. Kill a replica container and continue drawing to watch automatic failover.</p>
+      </section>
+
+      <section class="canvas-wrap">
+        <canvas id="board" width="1200" height="800"></canvas>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
