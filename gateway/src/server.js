@@ -14,11 +14,13 @@ const PORT = Number(process.env.PORT || 8080);
 const REPLICAS = JSON.parse(process.env.REPLICA_URLS || '{}');
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 1000);
 const LEADER_DISCOVERY_MS = Number(process.env.LEADER_DISCOVERY_MS || 1500);
+const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 500);
 
 const runtime = {
   leader: null,
   term: 0,
-  clients: new Set()
+  clients: new Set(),
+  operationCursor: 0
 };
 
 function logEvent(message, data = {}) {
@@ -80,9 +82,55 @@ async function discoverLeader() {
 
   if (changed) {
     logEvent('Leader update', { leader: runtime.leader });
+    broadcast({
+      type: 'LEADER_UPDATE',
+      leader: runtime.leader
+    });
   }
 
   return checks;
+}
+
+function broadcast(payload) {
+  const text = JSON.stringify(payload);
+  for (const client of runtime.clients) {
+    if (client.readyState === 1) {
+      client.send(text);
+    }
+  }
+}
+
+async function fetchLeaderState() {
+  if (!runtime.leader) {
+    return null;
+  }
+
+  try {
+    const response = await axios.get(`${runtime.leader.url}/state`, { timeout: REQUEST_TIMEOUT_MS });
+    return response.data;
+  } catch {
+    return null;
+  }
+}
+
+async function pumpCommittedOperations() {
+  const state = await fetchLeaderState();
+  if (!state) {
+    return;
+  }
+
+  const newOps = (state.operations || []).filter((op) => op.index > runtime.operationCursor);
+  if (!newOps.length) {
+    return;
+  }
+
+  for (const op of newOps) {
+    runtime.operationCursor = Math.max(runtime.operationCursor, op.index);
+    broadcast({
+      type: 'DRAW_COMMITTED',
+      operation: op
+    });
+  }
 }
 
 async function routeDrawCommand(payload) {
@@ -116,7 +164,9 @@ app.get('/health', async (req, res) => {
   res.json({
     service: 'gateway',
     leader: runtime.leader,
-    term: runtime.term
+    term: runtime.term,
+    connectedClients: runtime.clients.size,
+    operationCursor: runtime.operationCursor
   });
 });
 
@@ -128,7 +178,7 @@ app.get('/cluster', async (req, res) => {
   });
 });
 
-wss.on('connection', (socket) => {
+wss.on('connection', async (socket) => {
   runtime.clients.add(socket);
 
   socket.send(
@@ -138,6 +188,18 @@ wss.on('connection', (socket) => {
       term: runtime.term
     })
   );
+
+  const snapshot = await fetchLeaderState();
+  if (snapshot) {
+    socket.send(
+      JSON.stringify({
+        type: 'CANVAS_SNAPSHOT',
+        operations: snapshot.operations || [],
+        commitIndex: snapshot.commitIndex || 0,
+        leader: runtime.leader
+      })
+    );
+  }
 
   socket.on('message', async (raw) => {
     let payload;
@@ -173,6 +235,10 @@ wss.on('connection', (socket) => {
 setInterval(() => {
   void discoverLeader();
 }, LEADER_DISCOVERY_MS);
+
+setInterval(() => {
+  void pumpCommittedOperations();
+}, POLL_INTERVAL_MS);
 
 server.listen(PORT, () => {
   logEvent('Gateway runtime started', {
