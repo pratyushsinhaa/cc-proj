@@ -102,6 +102,8 @@ Replica API:
 Gateway API:
 - GET /health
   - active leader view + connected clients
+- GET /observability
+  - gateway counters and recent traceable events for integration debugging
 - GET /cluster
   - point-in-time health for all replicas
 - WebSocket /
@@ -123,8 +125,13 @@ Follower failure:
 
 Gateway-level resilience:
 - Continuous leader discovery.
-- Retry path on command route failure.
+- Retry path on command route failure (leader hint retry, then rediscovery retry).
 - Snapshot-on-connect for late joiners.
+
+Week 2 integration observability:
+- Each DRAW command receives a trace id in gateway logs.
+- Gateway exposes cumulative counters for ingress, reroutes, failures, and ACKed commands.
+- Recent events buffer supports quick diagnosis during leader transitions.
 
 ## 7. Reliability and Zero-Downtime Features
 

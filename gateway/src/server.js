@@ -21,18 +21,52 @@ const runtime = {
   leader: null,
   term: 0,
   operationCursor: 0,
-  clients: new Set()
+  clients: new Set(),
+  nextClientId: 1,
+  nextTraceId: 1,
+  stats: {
+    wsConnectionsTotal: 0,
+    wsMessagesTotal: 0,
+    drawCommandsReceived: 0,
+    drawCommandsRouted: 0,
+    drawCommandsAcked: 0,
+    rerouteRetries: 0,
+    routeFailures: 0,
+    committedBroadcasts: 0,
+    malformedMessages: 0
+  },
+  recentEvents: []
 };
 
 function logEvent(message, data = {}) {
-  console.log(
-    JSON.stringify({
-      ts: new Date().toISOString(),
-      service: 'gateway',
-      message,
-      ...data
-    })
-  );
+  const entry = {
+    ts: new Date().toISOString(),
+    service: 'gateway',
+    message,
+    ...data
+  };
+  runtime.recentEvents.push(entry);
+  if (runtime.recentEvents.length > 120) {
+    runtime.recentEvents.shift();
+  }
+  console.log(JSON.stringify(entry));
+}
+
+function leaderFromId(leaderId) {
+  if (!leaderId || !REPLICAS[leaderId]) {
+    return null;
+  }
+  return {
+    id: leaderId,
+    url: REPLICAS[leaderId],
+    term: runtime.term
+  };
+}
+
+function newTraceId() {
+  const id = runtime.nextTraceId;
+  runtime.nextTraceId += 1;
+  return `draw-${id}`;
 }
 
 async function fetchHealth(url) {
@@ -118,6 +152,7 @@ async function pumpCommittedOperations() {
 
   for (const op of newOps) {
     runtime.operationCursor = Math.max(runtime.operationCursor, op.index);
+    runtime.stats.committedBroadcasts += 1;
     broadcast({
       type: 'DRAW_COMMITTED',
       operation: op
@@ -125,11 +160,17 @@ async function pumpCommittedOperations() {
   }
 }
 
-async function routeDrawCommand(payload) {
+async function routeDrawCommand(commandPayload, options = {}) {
+  const allowRetry = options.allowRetry ?? true;
+  const traceId = options.traceId || newTraceId();
+  const clientId = options.clientId || null;
+
   if (!runtime.leader) {
     await discoverLeader();
   }
   if (!runtime.leader) {
+    runtime.stats.routeFailures += 1;
+    logEvent('Command route failed: leader unavailable', { traceId, clientId });
     throw new Error('Leader unavailable');
   }
 
@@ -138,15 +179,55 @@ async function routeDrawCommand(payload) {
       `${runtime.leader.url}/command`,
       {
         type: 'DRAW',
-        payload
+        payload: commandPayload,
+        meta: {
+          traceId,
+          clientId,
+          gatewayReceivedAt: new Date().toISOString()
+        }
       },
       {
         timeout: REQUEST_TIMEOUT_MS
       }
     );
-    return response.data;
+    runtime.stats.drawCommandsRouted += 1;
+    return {
+      ...response.data,
+      traceId
+    };
   } catch (error) {
+    const hintedLeader = leaderFromId(error?.response?.data?.leaderId);
+    if (allowRetry && hintedLeader) {
+      runtime.leader = hintedLeader;
+      runtime.stats.rerouteRetries += 1;
+      logEvent('Retrying command using leader hint', {
+        traceId,
+        clientId,
+        hintedLeader: hintedLeader.id
+      });
+      return routeDrawCommand(commandPayload, { allowRetry: false, traceId, clientId });
+    }
+
     runtime.leader = null;
+    if (allowRetry) {
+      await discoverLeader();
+      if (runtime.leader) {
+        runtime.stats.rerouteRetries += 1;
+        logEvent('Retrying command after leader rediscovery', {
+          traceId,
+          clientId,
+          leader: runtime.leader.id
+        });
+        return routeDrawCommand(commandPayload, { allowRetry: false, traceId, clientId });
+      }
+    }
+
+    runtime.stats.routeFailures += 1;
+    logEvent('Command route failed', {
+      traceId,
+      clientId,
+      error: error?.message || 'unknown error'
+    });
     throw error;
   }
 }
@@ -158,11 +239,26 @@ app.get('/health', async (req, res) => {
     leader: runtime.leader,
     connectedClients: runtime.clients.size,
     operationCursor: runtime.operationCursor,
-    term: runtime.term
+    term: runtime.term,
+    stats: runtime.stats
+  });
+});
+
+app.get('/observability', async (req, res) => {
+  await discoverLeader();
+  res.json({
+    service: 'gateway',
+    leader: runtime.leader,
+    term: runtime.term,
+    connectedClients: runtime.clients.size,
+    operationCursor: runtime.operationCursor,
+    stats: runtime.stats,
+    recentEvents: runtime.recentEvents
   });
 });
 
 app.get('/cluster', async (req, res) => {
+  await discoverLeader();
   const checks = await Promise.all(
     Object.entries(REPLICAS).map(async ([id, url]) => {
       const health = await fetchHealth(url);
@@ -181,11 +277,23 @@ app.get('/cluster', async (req, res) => {
 });
 
 wss.on('connection', async (socket) => {
+  const clientId = `c${runtime.nextClientId++}`;
+  socket.clientId = clientId;
   runtime.clients.add(socket);
+  runtime.stats.wsConnectionsTotal += 1;
+  logEvent('Client connected', {
+    clientId,
+    connectedClients: runtime.clients.size
+  });
+
+  if (!runtime.leader) {
+    await discoverLeader();
+  }
 
   socket.send(
     JSON.stringify({
       type: 'WELCOME',
+      clientId,
       leader: runtime.leader,
       term: runtime.term
     })
@@ -204,19 +312,39 @@ wss.on('connection', async (socket) => {
   }
 
   socket.on('message', async (raw) => {
+    runtime.stats.wsMessagesTotal += 1;
     let payload;
     try {
       payload = JSON.parse(raw.toString());
     } catch {
+      runtime.stats.malformedMessages += 1;
       socket.send(JSON.stringify({ type: 'ERROR', message: 'Malformed JSON payload' }));
       return;
     }
 
     if (payload.type === 'DRAW') {
+      runtime.stats.drawCommandsReceived += 1;
+      const traceId = newTraceId();
+      logEvent('Draw command received', {
+        traceId,
+        clientId,
+        hasPayload: Boolean(payload.payload)
+      });
       try {
-        const ack = await routeDrawCommand(payload.payload);
+        const ack = await routeDrawCommand(payload.payload, { traceId, clientId });
+        runtime.stats.drawCommandsAcked += 1;
+        logEvent('Draw command replicated', {
+          traceId,
+          clientId,
+          ack
+        });
         socket.send(JSON.stringify({ type: 'ACK', ack }));
       } catch (error) {
+        logEvent('Draw command replication failed', {
+          traceId,
+          clientId,
+          error: error?.message || 'unknown error'
+        });
         socket.send(
           JSON.stringify({
             type: 'ERROR',
@@ -229,6 +357,10 @@ wss.on('connection', async (socket) => {
 
   socket.on('close', () => {
     runtime.clients.delete(socket);
+    logEvent('Client disconnected', {
+      clientId,
+      connectedClients: runtime.clients.size
+    });
   });
 });
 
