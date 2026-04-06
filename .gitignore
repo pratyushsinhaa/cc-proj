@@ -1,0 +1,19 @@
+# Local plan (not committed)
+plan.txt
+
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Dependencies & build (repo-wide)
+node_modules/
+dist/
+*.log
+
+# Env
+.env
+.env.local
+.env.*.local
