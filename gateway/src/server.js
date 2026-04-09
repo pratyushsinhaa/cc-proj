@@ -11,7 +11,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 const PORT = Number(process.env.PORT || 8080);
-const REPLICAS = JSON.parse(process.env.REPLICA_URLS || '{}');
+const REPLICAS = parseReplicaMap(process.env.REPLICA_URLS || '{}');
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 1000);
 const LEADER_DISCOVERY_MS = Number(process.env.LEADER_DISCOVERY_MS || 1500);
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 500);
@@ -22,6 +22,32 @@ const runtime = {
   clients: new Set(),
   operationCursor: 0
 };
+
+function parseReplicaMap(rawValue) {
+  try {
+    const parsed = JSON.parse(rawValue);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function generateRequestId() {
+  const random = Math.floor(Math.random() * 1_000_000)
+    .toString()
+    .padStart(6, '0');
+  return `gw-${Date.now()}-${random}`;
+}
+
+function validateDrawPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return 'DRAW payload must be a JSON object';
+  }
+  return null;
+}
 
 function logEvent(message, data = {}) {
   console.log(
@@ -133,7 +159,7 @@ async function pumpCommittedOperations() {
   }
 }
 
-async function routeDrawCommand(payload) {
+async function routeDrawCommand(payload, requestId) {
   if (!runtime.leader) {
     await discoverLeader();
   }
@@ -142,22 +168,66 @@ async function routeDrawCommand(payload) {
   }
 
   try {
+    logEvent('Routing draw command', {
+      requestId,
+      leaderId: runtime.leader.id,
+      leaderTerm: runtime.leader.term
+    });
+
     const response = await axios.post(
       `${runtime.leader.url}/command`,
       {
         type: 'DRAW',
+        requestId,
         payload
       },
       {
         timeout: REQUEST_TIMEOUT_MS
       }
     );
+
+    logEvent('Draw command accepted', {
+      requestId,
+      leaderId: runtime.leader.id
+    });
+
     return response.data;
   } catch (error) {
+    logEvent('Draw command routing failed', {
+      requestId,
+      leaderId: runtime.leader?.id || null
+    });
     runtime.leader = null;
     throw error;
   }
 }
+
+app.post('/draw', async (req, res) => {
+  const payload = req.body?.payload || req.body;
+  const requestId = req.body?.requestId || generateRequestId();
+
+  const validationError = validateDrawPayload(payload);
+  if (validationError) {
+    res.status(400).json({
+      requestId,
+      error: validationError
+    });
+    return;
+  }
+
+  try {
+    const ack = await routeDrawCommand(payload, requestId);
+    res.status(202).json({
+      requestId,
+      ack
+    });
+  } catch {
+    res.status(503).json({
+      requestId,
+      error: 'Leader unavailable. Retry shortly.'
+    });
+  }
+});
 
 app.get('/health', async (req, res) => {
   await discoverLeader();
@@ -211,16 +281,42 @@ wss.on('connection', async (socket) => {
     }
 
     if (payload.type !== 'DRAW') {
+      socket.send(
+        JSON.stringify({
+          type: 'ERROR',
+          message: 'Unsupported message type'
+        })
+      );
+      return;
+    }
+
+    const requestId = payload.requestId || generateRequestId();
+    const validationError = validateDrawPayload(payload.payload);
+    if (validationError) {
+      socket.send(
+        JSON.stringify({
+          type: 'ERROR',
+          requestId,
+          message: validationError
+        })
+      );
       return;
     }
 
     try {
-      const ack = await routeDrawCommand(payload.payload);
-      socket.send(JSON.stringify({ type: 'ACK', ack }));
+      const ack = await routeDrawCommand(payload.payload, requestId);
+      socket.send(
+        JSON.stringify({
+          type: 'ACK',
+          requestId,
+          ack
+        })
+      );
     } catch {
       socket.send(
         JSON.stringify({
           type: 'ERROR',
+          requestId,
           message: 'Failed to route draw command to current leader'
         })
       );
