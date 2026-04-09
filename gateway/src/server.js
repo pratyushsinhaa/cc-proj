@@ -38,10 +38,14 @@ const runtime = {
   recentEvents: []
 };
 
-function logEvent(message, data = {}) {
+function logEvent(message, data = {}, meta = {}) {
+  const eventType = meta.eventType || 'gateway.info';
+  const severity = meta.severity || 'info';
   const entry = {
     ts: new Date().toISOString(),
     service: 'gateway',
+    severity,
+    eventType,
     message,
     ...data
   };
@@ -108,7 +112,9 @@ async function discoverLeader() {
 
   if (bestLeader && (!runtime.leader || runtime.leader.id !== bestLeader.id || runtime.leader.term !== bestLeader.term)) {
     runtime.leader = bestLeader;
-    logEvent('Leader discovered', runtime.leader);
+    logEvent('Leader discovered', runtime.leader, {
+      eventType: 'cluster.leader_discovered'
+    });
     broadcast({ type: 'LEADER_UPDATE', leader: runtime.leader });
   }
 
@@ -170,7 +176,11 @@ async function routeDrawCommand(commandPayload, options = {}) {
   }
   if (!runtime.leader) {
     runtime.stats.routeFailures += 1;
-    logEvent('Command route failed: leader unavailable', { traceId, clientId });
+    logEvent(
+      'Command route failed: leader unavailable',
+      { traceId, clientId },
+      { eventType: 'draw.route_failed', severity: 'warn' }
+    );
     throw new Error('Leader unavailable');
   }
 
@@ -200,11 +210,15 @@ async function routeDrawCommand(commandPayload, options = {}) {
     if (allowRetry && hintedLeader) {
       runtime.leader = hintedLeader;
       runtime.stats.rerouteRetries += 1;
-      logEvent('Retrying command using leader hint', {
-        traceId,
-        clientId,
-        hintedLeader: hintedLeader.id
-      });
+      logEvent(
+        'Retrying command using leader hint',
+        {
+          traceId,
+          clientId,
+          hintedLeader: hintedLeader.id
+        },
+        { eventType: 'draw.reroute_retry', severity: 'warn' }
+      );
       return routeDrawCommand(commandPayload, { allowRetry: false, traceId, clientId });
     }
 
@@ -213,21 +227,29 @@ async function routeDrawCommand(commandPayload, options = {}) {
       await discoverLeader();
       if (runtime.leader) {
         runtime.stats.rerouteRetries += 1;
-        logEvent('Retrying command after leader rediscovery', {
-          traceId,
-          clientId,
-          leader: runtime.leader.id
-        });
+        logEvent(
+          'Retrying command after leader rediscovery',
+          {
+            traceId,
+            clientId,
+            leader: runtime.leader.id
+          },
+          { eventType: 'draw.reroute_retry', severity: 'warn' }
+        );
         return routeDrawCommand(commandPayload, { allowRetry: false, traceId, clientId });
       }
     }
 
     runtime.stats.routeFailures += 1;
-    logEvent('Command route failed', {
-      traceId,
-      clientId,
-      error: error?.message || 'unknown error'
-    });
+    logEvent(
+      'Command route failed',
+      {
+        traceId,
+        clientId,
+        error: error?.message || 'unknown error'
+      },
+      { eventType: 'draw.route_failed', severity: 'error' }
+    );
     throw error;
   }
 }
@@ -281,10 +303,14 @@ wss.on('connection', async (socket) => {
   socket.clientId = clientId;
   runtime.clients.add(socket);
   runtime.stats.wsConnectionsTotal += 1;
-  logEvent('Client connected', {
-    clientId,
-    connectedClients: runtime.clients.size
-  });
+  logEvent(
+    'Client connected',
+    {
+      clientId,
+      connectedClients: runtime.clients.size
+    },
+    { eventType: 'ws.client_connected' }
+  );
 
   if (!runtime.leader) {
     await discoverLeader();
@@ -318,6 +344,11 @@ wss.on('connection', async (socket) => {
       payload = JSON.parse(raw.toString());
     } catch {
       runtime.stats.malformedMessages += 1;
+      logEvent(
+        'Malformed client payload',
+        { clientId },
+        { eventType: 'ws.malformed_payload', severity: 'warn' }
+      );
       socket.send(JSON.stringify({ type: 'ERROR', message: 'Malformed JSON payload' }));
       return;
     }
@@ -325,26 +356,38 @@ wss.on('connection', async (socket) => {
     if (payload.type === 'DRAW') {
       runtime.stats.drawCommandsReceived += 1;
       const traceId = newTraceId();
-      logEvent('Draw command received', {
-        traceId,
-        clientId,
-        hasPayload: Boolean(payload.payload)
-      });
+      logEvent(
+        'Draw command received',
+        {
+          traceId,
+          clientId,
+          hasPayload: Boolean(payload.payload)
+        },
+        { eventType: 'draw.received' }
+      );
       try {
         const ack = await routeDrawCommand(payload.payload, { traceId, clientId });
         runtime.stats.drawCommandsAcked += 1;
-        logEvent('Draw command replicated', {
-          traceId,
-          clientId,
-          ack
-        });
+        logEvent(
+          'Draw command replicated',
+          {
+            traceId,
+            clientId,
+            ack
+          },
+          { eventType: 'draw.acked' }
+        );
         socket.send(JSON.stringify({ type: 'ACK', ack }));
       } catch (error) {
-        logEvent('Draw command replication failed', {
-          traceId,
-          clientId,
-          error: error?.message || 'unknown error'
-        });
+        logEvent(
+          'Draw command replication failed',
+          {
+            traceId,
+            clientId,
+            error: error?.message || 'unknown error'
+          },
+          { eventType: 'draw.failed', severity: 'error' }
+        );
         socket.send(
           JSON.stringify({
             type: 'ERROR',
@@ -357,10 +400,14 @@ wss.on('connection', async (socket) => {
 
   socket.on('close', () => {
     runtime.clients.delete(socket);
-    logEvent('Client disconnected', {
-      clientId,
-      connectedClients: runtime.clients.size
-    });
+    logEvent(
+      'Client disconnected',
+      {
+        clientId,
+        connectedClients: runtime.clients.size
+      },
+      { eventType: 'ws.client_disconnected' }
+    );
   });
 });
 
@@ -373,8 +420,12 @@ setInterval(() => {
 }, POLL_INTERVAL_MS);
 
 server.listen(PORT, () => {
-  logEvent('Gateway started', {
-    port: PORT,
-    replicas: Object.keys(REPLICAS)
-  });
+  logEvent(
+    'Gateway started',
+    {
+      port: PORT,
+      replicas: Object.keys(REPLICAS)
+    },
+    { eventType: 'gateway.started' }
+  );
 });
