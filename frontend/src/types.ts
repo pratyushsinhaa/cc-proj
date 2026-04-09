@@ -9,6 +9,19 @@ export type Stroke = {
   commitIndex?: number;
 };
 
+export type ClusterHint = {
+  leaderId: string;
+  term: number;
+  role?: string;
+};
+
+export type ClusterTransition = {
+  reason: string;
+  leaderId: string;
+  term: number;
+  phase?: string;
+};
+
 export type ClientMessage =
   | { type: "hello"; lastSeenCommitIndex: number; protocolVersion: number }
   | {
@@ -35,4 +48,12 @@ export type ServerMessage =
       commitIndex: number;
     }
   | { type: "state.snapshot"; strokes: Stroke[]; lastCommitIndex: number }
+  | { type: "cluster.hint"; leaderId: string; term: number; role?: string }
+  | {
+      type: "cluster.transition";
+      reason: string;
+      leaderId: string;
+      term: number;
+      phase?: string;
+    }
   | { type: "error"; code: string; message: string };

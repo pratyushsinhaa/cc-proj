@@ -6,12 +6,19 @@ type Handlers = {
   onWelcome?: (clientId: string, lastCommitIndex: number) => void;
   onStrokeCommitted?: (stroke: Stroke) => void;
   onSnapshot?: (strokes: Stroke[], lastCommitIndex: number) => void;
+  onClusterHint?: (leaderId: string, term: number, role?: string) => void;
+  onClusterTransition?: (reason: string, leaderId: string, term: number, phase?: string) => void;
+  onReconnecting?: (delayMs: number) => void;
+  onQueueChange?: (pendingOutbound: number) => void;
   onError?: (code: string, message: string) => void;
 };
 
 const PROTOCOL_VERSION = 1;
 const MAX_BACKOFF_MS = 30_000;
 const INITIAL_BACKOFF_MS = 500;
+const MAX_PENDING_OUTBOUND = 200;
+
+export type StrokePayload = Omit<Stroke, "commitIndex" | "authorClientId">;
 
 function parseServerMessage(raw: unknown): ServerMessage | null {
   if (!raw || typeof raw !== "object") return null;
@@ -41,6 +48,28 @@ function parseServerMessage(raw: unknown): ServerMessage | null {
       lastCommitIndex: m.lastCommitIndex,
     };
   }
+  if (m.type === "cluster.hint" && typeof m.leaderId === "string" && typeof m.term === "number") {
+    return {
+      type: "cluster.hint",
+      leaderId: m.leaderId,
+      term: m.term,
+      role: typeof m.role === "string" ? m.role : undefined,
+    };
+  }
+  if (
+    m.type === "cluster.transition" &&
+    typeof m.reason === "string" &&
+    typeof m.leaderId === "string" &&
+    typeof m.term === "number"
+  ) {
+    return {
+      type: "cluster.transition",
+      reason: m.reason,
+      leaderId: m.leaderId,
+      term: m.term,
+      phase: typeof m.phase === "string" ? m.phase : undefined,
+    };
+  }
   if (m.type === "error" && typeof m.code === "string" && typeof m.message === "string") {
     return { type: "error", code: m.code, message: m.message };
   }
@@ -56,6 +85,8 @@ export class GatewayClient {
   private backoffMs = INITIAL_BACKOFF_MS;
   private shouldConnect = false;
   private clientId: string | null = null;
+  private handshakeComplete = false;
+  private pendingOutbound: StrokePayload[] = [];
 
   constructor(url: string, handlers: Handlers = {}) {
     this.url = url;
@@ -68,6 +99,10 @@ export class GatewayClient {
 
   get assignedClientId() {
     return this.clientId;
+  }
+
+  get outboundQueued() {
+    return this.pendingOutbound.length;
   }
 
   setLastSeenCommitIndex(n: number) {
@@ -85,6 +120,7 @@ export class GatewayClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.handshakeComplete = false;
     this.ws?.close();
     this.ws = null;
   }
@@ -94,14 +130,36 @@ export class GatewayClient {
     this.ws.send(JSON.stringify(msg));
   }
 
-  sendStrokeAppend(stroke: Omit<Stroke, "commitIndex">) {
-    this.send({
+  sendStrokeAppend(stroke: StrokePayload) {
+    if (this.ws?.readyState === WebSocket.OPEN && this.handshakeComplete) {
+      this.sendAppendNow(stroke);
+      return;
+    }
+    while (this.pendingOutbound.length >= MAX_PENDING_OUTBOUND) {
+      this.pendingOutbound.shift();
+    }
+    this.pendingOutbound.push(stroke);
+    this.handlers.onQueueChange?.(this.pendingOutbound.length);
+  }
+
+  private sendAppendNow(stroke: StrokePayload) {
+    const msg: ClientMessage = {
       type: "stroke.append",
       strokeId: stroke.strokeId,
       color: stroke.color,
       width: stroke.width,
       points: stroke.points,
-    });
+    };
+    this.send(msg);
+  }
+
+  private flushPendingOutbound() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.handshakeComplete) return;
+    while (this.pendingOutbound.length > 0) {
+      const s = this.pendingOutbound.shift();
+      if (s) this.sendAppendNow(s);
+    }
+    this.handlers.onQueueChange?.(0);
   }
 
   private openSocket() {
@@ -110,6 +168,7 @@ export class GatewayClient {
 
     const socket = new WebSocket(this.url);
     this.ws = socket;
+    this.handshakeComplete = false;
 
     socket.addEventListener("open", () => {
       this.backoffMs = INITIAL_BACKOFF_MS;
@@ -134,7 +193,9 @@ export class GatewayClient {
       if (msg.type === "welcome") {
         this.clientId = msg.clientId;
         this.lastSeenCommitIndex = msg.lastCommitIndex;
+        this.handshakeComplete = true;
         this.handlers.onWelcome?.(msg.clientId, msg.lastCommitIndex);
+        this.flushPendingOutbound();
       } else if (msg.type === "stroke.committed") {
         this.lastSeenCommitIndex = Math.max(this.lastSeenCommitIndex, msg.commitIndex);
         this.handlers.onStrokeCommitted?.({
@@ -148,6 +209,10 @@ export class GatewayClient {
       } else if (msg.type === "state.snapshot") {
         this.lastSeenCommitIndex = msg.lastCommitIndex;
         this.handlers.onSnapshot?.(msg.strokes, msg.lastCommitIndex);
+      } else if (msg.type === "cluster.hint") {
+        this.handlers.onClusterHint?.(msg.leaderId, msg.term, msg.role);
+      } else if (msg.type === "cluster.transition") {
+        this.handlers.onClusterTransition?.(msg.reason, msg.leaderId, msg.term, msg.phase);
       } else if (msg.type === "error") {
         this.handlers.onError?.(msg.code, msg.message);
       }
@@ -155,6 +220,7 @@ export class GatewayClient {
 
     socket.addEventListener("close", () => {
       this.ws = null;
+      this.handshakeComplete = false;
       this.handlers.onClose?.();
       this.scheduleReconnect();
     });
@@ -168,6 +234,7 @@ export class GatewayClient {
     if (!this.shouldConnect) return;
     if (this.reconnectTimer) return;
     const delay = this.backoffMs;
+    this.handlers.onReconnecting?.(delay);
     this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

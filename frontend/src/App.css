@@ -85,6 +85,33 @@
   color: #ff9b9b;
 }
 
+.status-reconnecting {
+  background: #2a2540;
+  color: #c4b5fd;
+}
+
+.meta-hint {
+  opacity: 0.85;
+  font-weight: 400;
+}
+
+.metrics {
+  font-size: 0.72rem;
+  color: #8b95a8;
+  width: 100%;
+  flex-basis: 100%;
+  padding-left: 0.15rem;
+}
+
+.metric-warn {
+  color: #fbbf24;
+  margin-right: 0.75rem;
+}
+
+.metric-ok {
+  color: #64748b;
+}
+
 .canvas-shell {
   flex: 1;
   display: flex;
