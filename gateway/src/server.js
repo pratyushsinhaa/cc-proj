@@ -89,6 +89,24 @@ async function fetchHealth(url) {
   }
 }
 
+async function collectReplicaSnapshot() {
+  return Promise.all(
+    Object.entries(REPLICAS).map(async ([id, url]) => {
+      const health = await fetchHealth(url);
+      return {
+        id,
+        url,
+        healthy: Boolean(health),
+        role: health?.role || 'unknown',
+        term: health?.term ?? null,
+        commitIndex: health?.commitIndex ?? null,
+        leaderId: health?.leaderId ?? null,
+        shuttingDown: Boolean(health?.shuttingDown)
+      };
+    })
+  );
+}
+
 async function discoverLeader() {
   let bestLeader = null;
 
@@ -296,10 +314,51 @@ app.get('/health', async (req, res) => {
 });
 
 app.get('/cluster', async (req, res) => {
-  const replicas = await discoverLeader();
+  await discoverLeader();
+  const replicas = await collectReplicaSnapshot();
   res.json({
     leader: runtime.leader,
     replicas
+  });
+});
+
+app.get('/dashboard', async (req, res) => {
+  await discoverLeader();
+  const replicas = await collectReplicaSnapshot();
+  const maxReplicaTerm = replicas.reduce((max, item) => {
+    if (typeof item.term !== 'number') {
+      return max;
+    }
+    return Math.max(max, item.term);
+  }, 0);
+
+  const recentConsensusEvents = runtime.recentEvents
+    .filter((event) => {
+      return (
+        event.type === 'Leader update' ||
+        event.type === 'Draw command accepted' ||
+        event.type === 'Operation cursor realigned from leader snapshot'
+      );
+    })
+    .slice(-12);
+
+  res.json({
+    cluster: {
+      leader: runtime.leader,
+      term: Math.max(runtime.term, maxReplicaTerm),
+      replicas
+    },
+    consensus: {
+      committedStrokeCount: runtime.operationCursor,
+      recentEvents: recentConsensusEvents
+    },
+    gateway: {
+      connectedClients: runtime.clients.size,
+      routeAttempts: runtime.routeAttempts,
+      routeFailures: runtime.routeFailures,
+      leaderChanges: runtime.leaderChanges,
+      failoverStatus: runtime.routeFailures > 0 ? 'recovering' : 'stable'
+    }
   });
 });
 
