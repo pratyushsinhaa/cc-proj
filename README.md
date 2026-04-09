@@ -27,6 +27,32 @@ The target is to provide the request ingress and leader-aware routing layer that
 	- retry command route
 - Observability baseline finalized with gateway health and cluster visibility endpoints.
 
+### Week 2: Core Implementation
+
+- WebSocket gateway ingress implemented for DRAW messages.
+- Leader discovery and forwarding implemented for command routing to active replica leader.
+- HTTP ingress endpoint added at `/draw` for integration and scripted validation.
+- Input validation and request ID tracing added for draw command flow.
+
+### Week 3: Reliability and Testing
+
+- Failover-aware route retry behavior added with configurable retry attempts.
+- Catch-up realignment added to recover client view after leader changes.
+- Structured event buffering added through `/runtime` for traceable runtime events.
+- Graceful shutdown handling added for restart-safe gateway lifecycle.
+- Gateway reliability workflows added:
+	- `scripts/gateway_hot_reload.sh`
+	- `scripts/gateway_rolling_replace.sh`
+
+### Week 4: Final Polish and Demo Readiness
+
+- Dashboard-ready aggregation endpoint added at `/dashboard` with:
+	- leader, term, role and health per replica
+	- committed stroke count and recent consensus events
+	- gateway connection count and failover status
+- Operator runbook steps consolidated in README for deployment and recovery.
+- Runtime environment reference table added for integration readiness.
+
 ## Implemented in This Branch
 
 - Gateway runtime service under gateway/
@@ -34,8 +60,9 @@ The target is to provide the request ingress and leader-aware routing layer that
 - WebSocket ingest path for draw operations
 - Leader-routed draw command forwarding
 - Committed operation polling and broadcast fanout
-- Health and cluster observability endpoints
+- Health, cluster, runtime, and dashboard observability endpoints
 - Containerization files for gateway service
+- Gateway hot-reload and rolling-replacement scripts
 
 ## Gateway Quick Start
 
@@ -50,3 +77,31 @@ Example environment configuration:
 - REQUEST_TIMEOUT_MS=1000
 - LEADER_DISCOVERY_MS=1500
 - POLL_INTERVAL_MS=500
+
+Additional gateway runtime variables:
+
+- ROUTE_RETRY_ATTEMPTS=2
+- EVENT_BUFFER_LIMIT=120
+
+## Week 4 Operator Runbook (Preetham Scope)
+
+1. Start or refresh the gateway container: `docker compose up -d --build gateway`
+2. Verify gateway health: `curl -fsS http://localhost:8080/health`
+3. Verify cluster snapshot visibility: `curl -fsS http://localhost:8080/cluster`
+4. Verify dashboard data for demo: `curl -fsS http://localhost:8080/dashboard`
+5. For hot reload replacement: `bash scripts/gateway_hot_reload.sh`
+6. For rolling replacement: `bash scripts/gateway_rolling_replace.sh`
+
+## Runtime Environment Table (Integration Reference)
+
+| Service | Variable | Purpose |
+|---|---|---|
+| gateway | PORT | Gateway listen port |
+| gateway | REPLICA_URLS | Replica id to URL mapping consumed by gateway |
+| gateway | REQUEST_TIMEOUT_MS | Timeout for replica API calls |
+| gateway | LEADER_DISCOVERY_MS | Leader discovery polling interval |
+| gateway | POLL_INTERVAL_MS | Committed operation polling interval |
+| gateway | ROUTE_RETRY_ATTEMPTS | Retry count during leader reroute |
+| gateway | EVENT_BUFFER_LIMIT | In-memory runtime event buffer size |
+| replica services | /health, /state, /command endpoints | Runtime contract consumed by gateway |
+| frontend clients | WebSocket messages DRAW, ACK, ERROR, LEADER_UPDATE, DRAW_COMMITTED, CANVAS_SNAPSHOT | Gateway-client runtime contract |
