@@ -37,6 +37,13 @@ Distributed systems project implementing RAFT-lite leader election, log replicat
 - Multi-client real-time synchronization
 - Chaos demo script for rapid failure conditions
 
+### Week 4 Scope
+
+- Structured and traceable gateway event output for failover analysis
+- Final demo script for one-pass reproduction
+- Requirement-to-evidence checklist for final validation
+- Dashboard-ready gateway API payload for cluster and consensus status
+
 ## Quick Start
 
 Prerequisites:
@@ -52,6 +59,8 @@ Open the app:
 - Frontend UI: http://localhost:3000
 - Gateway health: http://localhost:8080/health
 - Cluster view: http://localhost:8080/cluster
+- Observability: http://localhost:8080/observability
+- Dashboard data: http://localhost:8080/dashboard
 - Replica health: http://localhost:5001/health, http://localhost:5002/health, http://localhost:5003/health
 
 ## Demonstrating Required Behaviors
@@ -97,6 +106,14 @@ bash scripts/collect_logs.sh
 
 Generated logs will appear under /logs.
 
+### 6) Verify dashboard data and requirement checklist
+
+```bash
+curl -s http://localhost:8080/dashboard
+```
+
+Use docs/requirement-evidence-checklist.md to map runtime evidence to project requirements.
+
 ## Protocol Summary
 
 - Election RPC: POST /raft/request-vote
@@ -111,7 +128,8 @@ Commit rule:
 ## Docs
 
 - Detailed architecture: docs/architecture.md
-- Video/demo checklist: docs/demo-script.md
+- Final demo runbook: docs/demo-script.md
+- Requirement-to-evidence mapping: docs/requirement-evidence-checklist.md
 
 ## Notes
 

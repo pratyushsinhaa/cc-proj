@@ -1,1 +1,19 @@
 commit plan.pdf
+
+# Local Python environment
+.venv/
+
+# Node dependencies
+node_modules/
+gateway/node_modules/
+
+# Local logs and temp outputs
+logs/
+*.log
+
+# Temporary extracted helper files
+docs/_extracted_*.txt
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

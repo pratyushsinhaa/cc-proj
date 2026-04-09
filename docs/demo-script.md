@@ -1,6 +1,6 @@
-# Week 3 Failure Demo Script (Draft)
+# Final Demo Script (Week 4)
 
-This draft focuses on gateway traceability and failure-case observability.
+This runbook is intended for one-pass execution during the final demo.
 
 ## Goal
 
@@ -24,12 +24,19 @@ Demonstrate that draw commands remain traceable and cluster behavior remains und
 curl -s http://localhost:8080/observability
 ```
 
-3. Confirm expected fields:
+3. Query dashboard payload:
+
+```bash
+curl -s http://localhost:8080/dashboard
+```
+
+4. Confirm expected fields:
 - `stats.drawCommandsReceived`
 - `stats.drawCommandsRouted`
 - `stats.drawCommandsAcked`
 - `recentEvents` containing `draw.received` and `draw.acked`
 - Matching `traceId` values for received and acked events.
+- Dashboard cluster and consensus fields are populated.
 
 ## Scenario 2: Leader Kill During Active Drawing
 
@@ -46,16 +53,18 @@ docker compose kill <leader-replica>
 ```
 
 3. Continue drawing while failover occurs.
-4. Query observability again:
+4. Query observability and dashboard again:
 
 ```bash
 curl -s http://localhost:8080/observability
+curl -s http://localhost:8080/dashboard
 ```
 
 5. Verify traceable failover evidence:
 - `recentEvents` includes `draw.reroute_retry` or `draw.route_failed` during transition.
 - `stats.rerouteRetries` increments if retry path was used.
 - New `draw.acked` events appear after new leader stabilizes.
+- Dashboard leader and replica role/health values update after failover.
 
 ## Scenario 3: Malformed Client Payload Handling
 
@@ -71,9 +80,12 @@ curl -s http://localhost:8080/observability
 - Failover behavior is visible from structured event types.
 - Routing retries are measurable with counters.
 - Observability endpoint provides quick debugging signal during outages.
+- Dashboard endpoint gives a single payload for cluster, consensus, and gateway status.
 
 ## Evidence to Capture
 
 - Terminal output snippets of `GET /observability` before and after leader kill.
+- Terminal output snippets of `GET /dashboard` before and after leader kill.
 - One screenshot of cluster leader change.
 - One screenshot of continued canvas activity after failover.
+- Requirement mapping evidence in `docs/requirement-evidence-checklist.md`.

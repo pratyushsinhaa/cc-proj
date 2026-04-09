@@ -166,6 +166,17 @@ async function pumpCommittedOperations() {
   }
 }
 
+function recentConsensusEvents(limit = 20) {
+  const filtered = runtime.recentEvents.filter((event) =>
+    String(event.eventType || '').startsWith('draw.') ||
+    String(event.eventType || '').startsWith('cluster.')
+  );
+  if (filtered.length <= limit) {
+    return filtered;
+  }
+  return filtered.slice(filtered.length - limit);
+}
+
 async function routeDrawCommand(commandPayload, options = {}) {
   const allowRetry = options.allowRetry ?? true;
   const traceId = options.traceId || newTraceId();
@@ -295,6 +306,59 @@ app.get('/cluster', async (req, res) => {
   res.json({
     leader: runtime.leader,
     replicas: checks
+  });
+});
+
+app.get('/dashboard', async (req, res) => {
+  await discoverLeader();
+
+  const [leaderState, replicaHealth] = await Promise.all([
+    fetchLeaderState(),
+    Promise.all(
+      Object.entries(REPLICAS).map(async ([id, url]) => {
+        const health = await fetchHealth(url);
+        return {
+          id,
+          url,
+          role: health?.role ?? 'unreachable',
+          term: health?.term ?? null,
+          leaderId: health?.leaderId ?? null,
+          commitIndex: health?.commitIndex ?? null,
+          logLength: health?.logLength ?? null,
+          healthy: Boolean(health),
+          shuttingDown: Boolean(health?.shuttingDown)
+        };
+      })
+    )
+  ]);
+
+  const connectedReplicaCount = replicaHealth.filter((node) => node.healthy).length;
+
+  res.json({
+    service: 'gateway',
+    generatedAt: new Date().toISOString(),
+    leader: runtime.leader,
+    term: runtime.term,
+    cluster: {
+      totalReplicas: Object.keys(REPLICAS).length,
+      connectedReplicas: connectedReplicaCount,
+      replicas: replicaHealth
+    },
+    consensus: {
+      commitIndex: leaderState?.commitIndex ?? null,
+      committedStrokeCount: (leaderState?.operations || []).length,
+      recentEvents: recentConsensusEvents(20)
+    },
+    gateway: {
+      connectedClients: runtime.clients.size,
+      operationCursor: runtime.operationCursor,
+      reconnectAndFailover: {
+        rerouteRetries: runtime.stats.rerouteRetries,
+        routeFailures: runtime.stats.routeFailures,
+        malformedMessages: runtime.stats.malformedMessages
+      },
+      stats: runtime.stats
+    }
   });
 });
 
