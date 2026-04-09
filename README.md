@@ -14,6 +14,19 @@ Cloud Computing project for Sem 6 (2026).
 This branch contains Preetham's gateway/runtime portion of the project.
 The target is to provide the request ingress and leader-aware routing layer that plugs into replica services and frontend clients during integration.
 
+## Week-Wise Preetham Completion
+
+### Week 1: Design and Architecture
+
+- Gateway service ownership finalized: client ingress, leader discovery, leader-only routing, and committed-event fanout.
+- Replica integration contract finalized for `/health`, `/state`, and `/command`.
+- Leader rerouting and failover behavior finalized:
+	- detect route failure
+	- invalidate cached leader
+	- rediscover leader
+	- retry command route
+- Observability baseline finalized with gateway health and cluster visibility endpoints.
+
 ## Implemented in This Branch
 
 - Gateway runtime service under gateway/
@@ -37,7 +50,3 @@ Example environment configuration:
 - REQUEST_TIMEOUT_MS=1000
 - LEADER_DISCOVERY_MS=1500
 - POLL_INTERVAL_MS=500
-
-## Documentation
-
-- docs/gateway-runtime.md
