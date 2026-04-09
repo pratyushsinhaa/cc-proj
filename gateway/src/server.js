@@ -15,12 +15,19 @@ const REPLICAS = parseReplicaMap(process.env.REPLICA_URLS || '{}');
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 1000);
 const LEADER_DISCOVERY_MS = Number(process.env.LEADER_DISCOVERY_MS || 1500);
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 500);
+const ROUTE_RETRY_ATTEMPTS = Number(process.env.ROUTE_RETRY_ATTEMPTS || 2);
+const EVENT_BUFFER_LIMIT = Number(process.env.EVENT_BUFFER_LIMIT || 120);
 
 const runtime = {
   leader: null,
   term: 0,
   clients: new Set(),
-  operationCursor: 0
+  operationCursor: 0,
+  routeAttempts: 0,
+  routeFailures: 0,
+  leaderChanges: 0,
+  shuttingDown: false,
+  recentEvents: []
 };
 
 function parseReplicaMap(rawValue) {
@@ -42,6 +49,18 @@ function generateRequestId() {
   return `gw-${Date.now()}-${random}`;
 }
 
+function recordEvent(type, data = {}) {
+  runtime.recentEvents.push({
+    ts: new Date().toISOString(),
+    type,
+    ...data
+  });
+
+  if (runtime.recentEvents.length > EVENT_BUFFER_LIMIT) {
+    runtime.recentEvents.splice(0, runtime.recentEvents.length - EVENT_BUFFER_LIMIT);
+  }
+}
+
 function validateDrawPayload(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return 'DRAW payload must be a JSON object';
@@ -50,6 +69,7 @@ function validateDrawPayload(payload) {
 }
 
 function logEvent(message, data = {}) {
+  recordEvent(message, data);
   console.log(
     JSON.stringify({
       ts: new Date().toISOString(),
@@ -102,11 +122,13 @@ async function discoverLeader() {
   const changed =
     (!runtime.leader && bestLeader) ||
     (runtime.leader && !bestLeader) ||
-    (runtime.leader && bestLeader && runtime.leader.id !== bestLeader.id);
+    (runtime.leader && bestLeader && runtime.leader.id !== bestLeader.id) ||
+    (runtime.leader && bestLeader && runtime.leader.term !== bestLeader.term);
 
   runtime.leader = bestLeader;
 
   if (changed) {
+    runtime.leaderChanges += 1;
     logEvent('Leader update', { leader: runtime.leader });
     broadcast({
       type: 'LEADER_UPDATE',
@@ -145,7 +167,22 @@ async function pumpCommittedOperations() {
     return;
   }
 
-  const newOps = (state.operations || []).filter((op) => op.index > runtime.operationCursor);
+  const stateOps = state.operations || [];
+  const highestStateIndex = stateOps.length ? stateOps[stateOps.length - 1].index : 0;
+  if (highestStateIndex < runtime.operationCursor) {
+    runtime.operationCursor = highestStateIndex;
+    broadcast({
+      type: 'CANVAS_SNAPSHOT',
+      operations: stateOps,
+      commitIndex: state.commitIndex || highestStateIndex,
+      leader: runtime.leader
+    });
+    logEvent('Operation cursor realigned from leader snapshot', {
+      highestStateIndex
+    });
+  }
+
+  const newOps = stateOps.filter((op) => op.index > runtime.operationCursor);
   if (!newOps.length) {
     return;
   }
@@ -160,46 +197,60 @@ async function pumpCommittedOperations() {
 }
 
 async function routeDrawCommand(payload, requestId) {
-  if (!runtime.leader) {
-    await discoverLeader();
-  }
-  if (!runtime.leader) {
-    throw new Error('Leader unavailable');
-  }
+  const maxAttempts = Math.max(1, ROUTE_RETRY_ATTEMPTS);
+  let lastError = new Error('Leader unavailable');
 
-  try {
-    logEvent('Routing draw command', {
-      requestId,
-      leaderId: runtime.leader.id,
-      leaderTerm: runtime.leader.term
-    });
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    runtime.routeAttempts += 1;
 
-    const response = await axios.post(
-      `${runtime.leader.url}/command`,
-      {
-        type: 'DRAW',
+    if (!runtime.leader) {
+      await discoverLeader();
+    }
+    if (!runtime.leader) {
+      continue;
+    }
+
+    try {
+      logEvent('Routing draw command', {
         requestId,
-        payload
-      },
-      {
-        timeout: REQUEST_TIMEOUT_MS
-      }
-    );
+        attempt,
+        leaderId: runtime.leader.id,
+        leaderTerm: runtime.leader.term
+      });
 
-    logEvent('Draw command accepted', {
-      requestId,
-      leaderId: runtime.leader.id
-    });
+      const response = await axios.post(
+        `${runtime.leader.url}/command`,
+        {
+          type: 'DRAW',
+          requestId,
+          payload
+        },
+        {
+          timeout: REQUEST_TIMEOUT_MS
+        }
+      );
 
-    return response.data;
-  } catch (error) {
-    logEvent('Draw command routing failed', {
-      requestId,
-      leaderId: runtime.leader?.id || null
-    });
-    runtime.leader = null;
-    throw error;
+      logEvent('Draw command accepted', {
+        requestId,
+        attempt,
+        leaderId: runtime.leader.id
+      });
+
+      return response.data;
+    } catch (error) {
+      runtime.routeFailures += 1;
+      lastError = error;
+      logEvent('Draw command routing failed', {
+        requestId,
+        attempt,
+        leaderId: runtime.leader?.id || null
+      });
+      runtime.leader = null;
+      await discoverLeader();
+    }
   }
+
+  throw lastError;
 }
 
 app.post('/draw', async (req, res) => {
@@ -236,7 +287,11 @@ app.get('/health', async (req, res) => {
     leader: runtime.leader,
     term: runtime.term,
     connectedClients: runtime.clients.size,
-    operationCursor: runtime.operationCursor
+    operationCursor: runtime.operationCursor,
+    routeAttempts: runtime.routeAttempts,
+    routeFailures: runtime.routeFailures,
+    leaderChanges: runtime.leaderChanges,
+    shuttingDown: runtime.shuttingDown
   });
 });
 
@@ -245,6 +300,20 @@ app.get('/cluster', async (req, res) => {
   res.json({
     leader: runtime.leader,
     replicas
+  });
+});
+
+app.get('/runtime', (req, res) => {
+  res.json({
+    leader: runtime.leader,
+    term: runtime.term,
+    operationCursor: runtime.operationCursor,
+    connectedClients: runtime.clients.size,
+    routeAttempts: runtime.routeAttempts,
+    routeFailures: runtime.routeFailures,
+    leaderChanges: runtime.leaderChanges,
+    shuttingDown: runtime.shuttingDown,
+    recentEvents: runtime.recentEvents.slice(-25)
   });
 });
 
@@ -328,13 +397,45 @@ wss.on('connection', async (socket) => {
   });
 });
 
-setInterval(() => {
+const leaderDiscoveryTimer = setInterval(() => {
   void discoverLeader();
 }, LEADER_DISCOVERY_MS);
 
-setInterval(() => {
+const committedPumpTimer = setInterval(() => {
   void pumpCommittedOperations();
 }, POLL_INTERVAL_MS);
+
+function shutdownGracefully(signal) {
+  if (runtime.shuttingDown) {
+    return;
+  }
+
+  runtime.shuttingDown = true;
+  logEvent('Gateway shutdown initiated', { signal });
+
+  clearInterval(leaderDiscoveryTimer);
+  clearInterval(committedPumpTimer);
+
+  for (const client of runtime.clients) {
+    try {
+      client.close(1001, 'Gateway restarting');
+    } catch {
+      // Best effort close.
+    }
+  }
+
+  server.close(() => {
+    logEvent('Gateway shutdown complete', { signal });
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    process.exit(1);
+  }, 5000).unref();
+}
+
+process.on('SIGINT', () => shutdownGracefully('SIGINT'));
+process.on('SIGTERM', () => shutdownGracefully('SIGTERM'));
 
 server.listen(PORT, () => {
   logEvent('Gateway runtime started', {
