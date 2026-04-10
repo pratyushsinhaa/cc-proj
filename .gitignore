@@ -1,3 +1,4 @@
 **/node_modules
 logs/failover-*.log
 .DS_Store
+docs/commit-plan.md
