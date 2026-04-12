@@ -1,5 +1,6 @@
 # Local plan (not committed)
 plan.txt
+abc.pdf
 
 # OS / editor
 .DS_Store
@@ -25,8 +26,10 @@ logs/failover-*.log
 .env.local
 .env.*.local
 
-# Local Python environment
+# Local Python environment and cache
 .venv/
+__pycache__/
+*.py[cod]
 
 # Docs and temp artifacts
 docs/commit-plan.md

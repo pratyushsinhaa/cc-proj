@@ -1,0 +1,10 @@
+{
+  "include": [
+    "raft_core",
+    "tests"
+  ],
+  "extraPaths": [
+    "."
+  ],
+  "typeCheckingMode": "basic"
+}

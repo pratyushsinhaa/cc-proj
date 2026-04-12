@@ -15,7 +15,8 @@ Distributed systems project implementing RAFT-lite leader election, log replicat
 - /replica1: RAFT-lite replica service
 - /replica2: RAFT-lite replica service
 - /replica3: RAFT-lite replica service
-- /frontend: Browser drawing client
+- /raft_core: Python RAFT core module and HTTP endpoints
+- /frontend: Browser drawing client/dashboard UI
 - /docs: Architecture, demo script, and evidence docs
 - /scripts: Reload, chaos, and log collection scripts
 - docker-compose.yml: Local cluster orchestration
@@ -28,6 +29,20 @@ Distributed systems project implementing RAFT-lite leader election, log replicat
 - WebSocket multi-client synchronization and snapshot catch-up
 - Dashboard endpoint at /dashboard for cluster and consensus visibility
 - Hot reload and rolling replacement scripts for runtime reliability
+
+## RAFT Core (Pratyush Scope)
+
+- Term and vote handling with log freshness checks
+- RequestVote and AppendEntries RPC logic
+- Candidate election loop and leader transition
+- Leader replication tracking with nextIndex and matchIndex
+- Majority commit advancement in the RAFT core state machine
+
+Local verification for RAFT core:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
 
 ## Quick Start
 
@@ -50,6 +65,7 @@ Open:
 
 ```bash
 curl -s http://localhost:8080/cluster | cat
+curl -s http://localhost:8080/dashboard | cat
 bash scripts/hot_reload_replica.sh replica2
 bash scripts/gateway_hot_reload.sh
 bash scripts/gateway_rolling_replace.sh
