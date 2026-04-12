@@ -1,34 +1,91 @@
-# Demonstration Plan (8-10 minutes)
+# Final Demo Script (Week 4)
 
-## 1. Startup and Baseline
-1. Run docker compose up --build.
-2. Open frontend in two or more browser tabs.
-3. Draw strokes and show all tabs receiving updates.
-4. Show /cluster output from gateway.
+This runbook is intended for one-pass execution during the final demo.
 
-## 2. Leader Election Visibility
-1. Query each replica /health endpoint.
-2. Identify current leader and current term.
-3. Show gateway /health leader view.
+## Goal
 
-## 3. Leader Kill and Automatic Failover
-1. Kill the leader container: docker compose kill replicaX.
-2. Continue drawing during election window.
-3. Show new leader elected with incremented term.
-4. Show canvas remains consistent across tabs.
+Demonstrate that draw commands remain traceable and cluster behavior remains understandable during leader disruption.
 
-## 4. Hot Reload / Blue-Green Style Replacement
-1. Edit one replica source line (for example log message text).
-2. Run scripts/hot_reload_replica.sh replicaY.
-3. Show cluster remains live while replica restarts.
-4. Continue drawing and verify consistency.
+## Prerequisites
 
-## 5. Chaos Conditions
-1. Run scripts/chaos_demo.sh.
-2. Keep 2-3 client tabs connected and drawing.
-3. Show no total outage as long as quorum survives.
+- Services are running.
+- At least two browser tabs are connected.
+- Gateway endpoints available:
+  - `GET /health`
+  - `GET /cluster`
+  - `GET /observability`
 
-## 6. Evidence Collection
-1. Run scripts/collect_logs.sh.
-2. Open saved log file from logs/.
-3. Highlight election start, leader elected, and replication events.
+## Scenario 1: Baseline Traffic and Trace IDs
+
+1. Open two tabs and draw in both.
+2. Query gateway observability:
+
+```bash
+curl -s http://localhost:8080/observability
+```
+
+3. Query dashboard payload:
+
+```bash
+curl -s http://localhost:8080/dashboard
+```
+
+4. Confirm expected fields:
+- `stats.drawCommandsReceived`
+- `stats.drawCommandsRouted`
+- `stats.drawCommandsAcked`
+- `recentEvents` containing `draw.received` and `draw.acked`
+- Matching `traceId` values for received and acked events.
+- Dashboard cluster and consensus fields are populated.
+
+## Scenario 2: Leader Kill During Active Drawing
+
+1. Identify leader:
+
+```bash
+curl -s http://localhost:8080/cluster
+```
+
+2. Kill current leader container:
+
+```bash
+docker compose kill <leader-replica>
+```
+
+3. Continue drawing while failover occurs.
+4. Query observability and dashboard again:
+
+```bash
+curl -s http://localhost:8080/observability
+curl -s http://localhost:8080/dashboard
+```
+
+5. Verify traceable failover evidence:
+- `recentEvents` includes `draw.reroute_retry` or `draw.route_failed` during transition.
+- `stats.rerouteRetries` increments if retry path was used.
+- New `draw.acked` events appear after new leader stabilizes.
+- Dashboard leader and replica role/health values update after failover.
+
+## Scenario 3: Malformed Client Payload Handling
+
+1. Send malformed WebSocket payload (or simulate from browser console).
+2. Confirm no process crash.
+3. Verify in observability output:
+- `stats.malformedMessages` increments.
+- `recentEvents` includes `ws.malformed_payload`.
+
+## Demo Talking Points
+
+- Every draw operation has a trace id in gateway logs.
+- Failover behavior is visible from structured event types.
+- Routing retries are measurable with counters.
+- Observability endpoint provides quick debugging signal during outages.
+- Dashboard endpoint gives a single payload for cluster, consensus, and gateway status.
+
+## Evidence to Capture
+
+- Terminal output snippets of `GET /observability` before and after leader kill.
+- Terminal output snippets of `GET /dashboard` before and after leader kill.
+- One screenshot of cluster leader change.
+- One screenshot of continued canvas activity after failover.
+- Requirement mapping evidence in `docs/requirement-evidence-checklist.md`.

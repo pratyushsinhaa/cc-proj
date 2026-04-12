@@ -1,4 +1,18 @@
 **/node_modules
+node_modules/
+gateway/node_modules/
+
+logs/
 logs/failover-*.log
+*.log
+
 .DS_Store
+Thumbs.db
+
+# Local Python environment
+.venv/
+
+# Docs and temp artifacts
 docs/commit-plan.md
+docs/_extracted_*.txt
+commit plan.pdf
