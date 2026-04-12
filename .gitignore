@@ -1,13 +1,29 @@
+# Local plan (not committed)
+plan.txt
+
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+Thumbs.db
+
+# Dependencies & build (repo-wide)
 **/node_modules
 node_modules/
 gateway/node_modules/
-
-logs/
-logs/failover-*.log
+dist/
 *.log
 
-.DS_Store
-Thumbs.db
+# Runtime artifacts
+logs/
+logs/failover-*.log
+
+# Env
+.env
+.env.local
+.env.*.local
 
 # Local Python environment
 .venv/
