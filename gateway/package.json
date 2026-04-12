@@ -1,8 +1,9 @@
 {
-  "name": "gateway",
+  "name": "miniraft-gateway",
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js"
   },
@@ -10,6 +11,6 @@
     "axios": "^1.8.2",
     "cors": "^2.8.5",
     "express": "^4.21.2",
-    "ws": "^8.18.0"
+    "ws": "^8.18.1"
   }
 }
