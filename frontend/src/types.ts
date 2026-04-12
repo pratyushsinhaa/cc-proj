@@ -25,11 +25,13 @@ export type ClusterTransition = {
 export type ClientMessage =
   | { type: "hello"; lastSeenCommitIndex: number; protocolVersion: number }
   | {
-      type: "stroke.append";
-      strokeId: string;
-      color: string;
-      width: number;
-      points: Point[];
+      type: "DRAW";
+      payload: {
+        strokeId: string;
+        color: string;
+        width: number;
+        points: Point[];
+      };
     };
 
 export type ServerMessage =

@@ -13,6 +13,7 @@ Demonstrate that draw commands remain traceable and cluster behavior remains und
 - Gateway endpoints available:
   - `GET /health`
   - `GET /cluster`
+  - `GET /dashboard`
   - `GET /observability`
 
 ## Scenario 1: Baseline Traffic and Trace IDs
@@ -37,6 +38,13 @@ curl -s http://localhost:8080/dashboard
 - `recentEvents` containing `draw.received` and `draw.acked`
 - Matching `traceId` values for received and acked events.
 - Dashboard cluster and consensus fields are populated.
+
+## Scenario 1b: Optional Network Partition Drill
+
+1. Disconnect one replica container from the Docker network or stop it briefly.
+2. Continue drawing in the browser.
+3. Confirm the remaining quorum continues to accept commands.
+4. Restore the replica and verify it catches up from committed state.
 
 ## Scenario 2: Leader Kill During Active Drawing
 
@@ -81,6 +89,11 @@ curl -s http://localhost:8080/dashboard
 - Routing retries are measurable with counters.
 - Observability endpoint provides quick debugging signal during outages.
 - Dashboard endpoint gives a single payload for cluster, consensus, and gateway status.
+
+## Optional Coverage Notes
+
+- The network-partition drill is optional and demonstrates quorum continuity under partial isolation.
+- The dashboard endpoint is part of the final demo path and should be shown alongside /cluster.
 
 ## Evidence to Capture
 

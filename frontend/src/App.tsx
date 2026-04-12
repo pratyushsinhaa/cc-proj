@@ -4,7 +4,7 @@ import type { Stroke } from "./types";
 import { GatewayClient } from "./ws/gatewayClient";
 import "./App.css";
 
-const defaultWsUrl = "ws://localhost:8787/ws";
+const defaultWsUrl = "ws://localhost:8080";
 
 function mergeCommitted(prev: Stroke[], incoming: Stroke): Stroke[] {
   const without = prev.filter((s) => s.strokeId !== incoming.strokeId);

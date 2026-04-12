@@ -27,7 +27,13 @@ const runtime = {
   routeFailures: 0,
   leaderChanges: 0,
   shuttingDown: false,
-  recentEvents: []
+  recentEvents: [],
+  stats: {
+    drawCommandsReceived: 0,
+    drawCommandsAcked: 0,
+    malformedMessages: 0,
+    rerouteRetries: 0
+  }
 };
 
 function parseReplicaMap(rawValue) {
@@ -228,6 +234,11 @@ async function routeDrawCommand(payload, requestId) {
       continue;
     }
 
+    if (attempt > 1) {
+      runtime.stats.rerouteRetries += 1;
+      logEvent('Draw reroute retry', { requestId, attempt });
+    }
+
     try {
       logEvent('Routing draw command', {
         requestId,
@@ -275,8 +286,11 @@ app.post('/draw', async (req, res) => {
   const payload = req.body?.payload || req.body;
   const requestId = req.body?.requestId || generateRequestId();
 
+  runtime.stats.drawCommandsReceived += 1;
+
   const validationError = validateDrawPayload(payload);
   if (validationError) {
+    runtime.stats.malformedMessages += 1;
     res.status(400).json({
       requestId,
       error: validationError
@@ -286,6 +300,7 @@ app.post('/draw', async (req, res) => {
 
   try {
     const ack = await routeDrawCommand(payload, requestId);
+    runtime.stats.drawCommandsAcked += 1;
     res.status(202).json({
       requestId,
       ack
@@ -357,8 +372,30 @@ app.get('/dashboard', async (req, res) => {
       routeAttempts: runtime.routeAttempts,
       routeFailures: runtime.routeFailures,
       leaderChanges: runtime.leaderChanges,
+      drawCommandsReceived: runtime.stats.drawCommandsReceived,
+      drawCommandsAcked: runtime.stats.drawCommandsAcked,
+      malformedMessages: runtime.stats.malformedMessages,
+      rerouteRetries: runtime.stats.rerouteRetries,
       failoverStatus: runtime.routeFailures > 0 ? 'recovering' : 'stable'
     }
+  });
+});
+
+app.get('/observability', (req, res) => {
+  res.json({
+    leader: runtime.leader,
+    term: runtime.term,
+    stats: {
+      drawCommandsReceived: runtime.stats.drawCommandsReceived,
+      drawCommandsRouted: runtime.routeAttempts,
+      drawCommandsAcked: runtime.stats.drawCommandsAcked,
+      rerouteRetries: runtime.stats.rerouteRetries,
+      malformedMessages: runtime.stats.malformedMessages,
+      routeFailures: runtime.routeFailures,
+      connectedClients: runtime.clients.size,
+      operationCursor: runtime.operationCursor
+    },
+    recentEvents: runtime.recentEvents.slice(-25)
   });
 });
 
@@ -371,6 +408,10 @@ app.get('/runtime', (req, res) => {
     routeAttempts: runtime.routeAttempts,
     routeFailures: runtime.routeFailures,
     leaderChanges: runtime.leaderChanges,
+    drawCommandsReceived: runtime.stats.drawCommandsReceived,
+    drawCommandsAcked: runtime.stats.drawCommandsAcked,
+    malformedMessages: runtime.stats.malformedMessages,
+    rerouteRetries: runtime.stats.rerouteRetries,
     shuttingDown: runtime.shuttingDown,
     recentEvents: runtime.recentEvents.slice(-25)
   });
@@ -404,6 +445,7 @@ wss.on('connection', async (socket) => {
     try {
       payload = JSON.parse(raw.toString());
     } catch {
+      runtime.stats.malformedMessages += 1;
       socket.send(JSON.stringify({ type: 'ERROR', message: 'Malformed JSON payload' }));
       return;
     }
@@ -421,6 +463,7 @@ wss.on('connection', async (socket) => {
     const requestId = payload.requestId || generateRequestId();
     const validationError = validateDrawPayload(payload.payload);
     if (validationError) {
+      runtime.stats.malformedMessages += 1;
       socket.send(
         JSON.stringify({
           type: 'ERROR',
@@ -432,7 +475,9 @@ wss.on('connection', async (socket) => {
     }
 
     try {
+      runtime.stats.drawCommandsReceived += 1;
       const ack = await routeDrawCommand(payload.payload, requestId);
+      runtime.stats.drawCommandsAcked += 1;
       socket.send(
         JSON.stringify({
           type: 'ACK',

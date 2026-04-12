@@ -87,4 +87,10 @@ bash scripts/collect_logs.sh
 
 - docs/architecture.md
 - docs/demo-script.md
+- docs/deployment-runbook.md
 - docs/requirement-evidence-checklist.md
+
+## Hosting Notes
+
+The project can be demo-hosted on a single AWS free-tier EC2 instance with Docker Compose.
+For a safer setup, expose only the frontend and gateway ports publicly and keep the replica ports private.

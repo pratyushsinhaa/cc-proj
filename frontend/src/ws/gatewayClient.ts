@@ -13,7 +13,6 @@ type Handlers = {
   onError?: (code: string, message: string) => void;
 };
 
-const PROTOCOL_VERSION = 1;
 const MAX_BACKOFF_MS = 30_000;
 const INITIAL_BACKOFF_MS = 500;
 const MAX_PENDING_OUTBOUND = 200;
@@ -23,6 +22,75 @@ export type StrokePayload = Omit<Stroke, "commitIndex" | "authorClientId">;
 function parseServerMessage(raw: unknown): ServerMessage | null {
   if (!raw || typeof raw !== "object") return null;
   const m = raw as Record<string, unknown>;
+  if (m.type === "WELCOME") {
+    return {
+      type: "welcome",
+      clientId: String(m.clientId ?? "browser-client"),
+      lastCommitIndex: typeof m.commitIndex === "number" ? m.commitIndex : 0,
+    };
+  }
+  if (m.type === "DRAW_COMMITTED" && m.operation && typeof m.operation === "object") {
+    const op = m.operation as Record<string, unknown>;
+    const payload = (op.payload && typeof op.payload === "object" ? op.payload : {}) as Record<string, unknown>;
+    let points = Array.isArray(payload.points) ? (payload.points as Stroke["points"]) : [];
+    if (!points.length && typeof payload.x0 === "number" && typeof payload.y0 === "number" && typeof payload.x1 === "number" && typeof payload.y1 === "number") {
+      points = [
+        { x: payload.x0 as number, y: payload.y0 as number },
+        { x: payload.x1 as number, y: payload.y1 as number },
+      ];
+    }
+    return {
+      type: "stroke.committed",
+      strokeId: String(payload.strokeId ?? `stroke-${String(op.index ?? Date.now())}`),
+      color: String(payload.color ?? "#000000"),
+      width: typeof payload.width === "number" ? payload.width : 2,
+      points,
+      authorClientId: typeof payload.authorClientId === "string" ? payload.authorClientId : undefined,
+      commitIndex: typeof op.index === "number" ? op.index : 0,
+    };
+  }
+  if (m.type === "CANVAS_SNAPSHOT") {
+    const operations = Array.isArray(m.operations) ? (m.operations as Array<Record<string, unknown>>) : [];
+    const strokes: Stroke[] = operations.map((op) => {
+      const payload = (op.payload && typeof op.payload === "object" ? op.payload : {}) as Record<string, unknown>;
+      let points = Array.isArray(payload.points) ? (payload.points as Stroke["points"]) : [];
+      if (!points.length && typeof payload.x0 === "number" && typeof payload.y0 === "number" && typeof payload.x1 === "number" && typeof payload.y1 === "number") {
+        points = [
+          { x: payload.x0 as number, y: payload.y0 as number },
+          { x: payload.x1 as number, y: payload.y1 as number },
+        ];
+      }
+      return {
+        strokeId: String(payload.strokeId ?? `stroke-${String(op.index ?? 0)}`),
+        color: String(payload.color ?? "#000000"),
+        width: typeof payload.width === "number" ? payload.width : 2,
+        points,
+        commitIndex: typeof op.index === "number" ? op.index : 0,
+      };
+    });
+    return {
+      type: "state.snapshot",
+      strokes,
+      lastCommitIndex: typeof m.commitIndex === "number" ? m.commitIndex : 0,
+    };
+  }
+  if (m.type === "LEADER_UPDATE") {
+    const leader = (m.leader && typeof m.leader === "object" ? m.leader : null) as Record<string, unknown> | null;
+    const leaderId = leader && typeof leader.id === "string" ? leader.id : "unknown";
+    const term = leader && typeof leader.term === "number" ? leader.term : 0;
+    return {
+      type: "cluster.hint",
+      leaderId,
+      term,
+    };
+  }
+  if (m.type === "ERROR") {
+    return {
+      type: "error",
+      code: "gateway_error",
+      message: String(m.message ?? "Unknown gateway error"),
+    };
+  }
   if (m.type === "welcome" && typeof m.clientId === "string" && typeof m.lastCommitIndex === "number") {
     return {
       type: "welcome",
@@ -144,11 +212,8 @@ export class GatewayClient {
 
   private sendAppendNow(stroke: StrokePayload) {
     const msg: ClientMessage = {
-      type: "stroke.append",
-      strokeId: stroke.strokeId,
-      color: stroke.color,
-      width: stroke.width,
-      points: stroke.points,
+      type: "DRAW",
+      payload: stroke,
     };
     this.send(msg);
   }
@@ -172,13 +237,9 @@ export class GatewayClient {
 
     socket.addEventListener("open", () => {
       this.backoffMs = INITIAL_BACKOFF_MS;
+      this.handshakeComplete = true;
       this.handlers.onOpen?.();
-      const hello: ClientMessage = {
-        type: "hello",
-        lastSeenCommitIndex: this.lastSeenCommitIndex,
-        protocolVersion: PROTOCOL_VERSION,
-      };
-      socket.send(JSON.stringify(hello));
+      this.flushPendingOutbound();
     });
 
     socket.addEventListener("message", (ev) => {
