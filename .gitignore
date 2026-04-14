@@ -35,3 +35,5 @@ __pycache__/
 docs/commit-plan.md
 docs/_extracted_*.txt
 commit plan.pdf
+
+MiniRaft.pem
