@@ -30,7 +30,7 @@ Distributed systems project implementing RAFT-lite leader election, log replicat
 - Dashboard endpoint at /dashboard for cluster and consensus visibility
 - Hot reload and rolling replacement scripts for runtime reliability
 
-## RAFT Core (Pratyush Scope)
+## RAFT Core
 
 - Term and vote handling with log freshness checks
 - RequestVote and AppendEntries RPC logic
