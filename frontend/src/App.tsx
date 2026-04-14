@@ -4,7 +4,24 @@ import type { Stroke } from "./types";
 import { GatewayClient } from "./ws/gatewayClient";
 import "./App.css";
 
-const defaultWsUrl = "ws://localhost:8080";
+function getDefaultWsUrl(): string {
+  // If environment variable is set, use it
+  const envUrl = import.meta.env.VITE_WS_URL;
+  if (envUrl) return envUrl;
+
+  const { hostname, protocol } = window.location;
+  
+  // Determine WebSocket protocol based on current page protocol
+  const wsProtocol = protocol === "https:" ? "wss:" : "ws:";
+  
+  // Gateway always runs on port 8080, regardless of where frontend is accessed from
+  // Works for: localhost:3000 → ws://localhost:8080
+  //           13.60.97.59:3000 → ws://13.60.97.59:8080
+  //           example.com:3000 → ws://example.com:8080
+  return `${wsProtocol}//${hostname}:8080`;
+}
+
+const defaultWsUrl = getDefaultWsUrl();
 
 function mergeCommitted(prev: Stroke[], incoming: Stroke): Stroke[] {
   const without = prev.filter((s) => s.strokeId !== incoming.strokeId);
