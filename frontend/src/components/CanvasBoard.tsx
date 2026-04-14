@@ -25,6 +25,14 @@ function distance(a: Point, b: Point) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+function createStrokeId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  const rand = Math.random().toString(16).slice(2, 10);
+  return `stroke-${Date.now()}-${rand}`;
+}
+
 type Props = {
   committedStrokes: Stroke[];
   onStrokeComplete: (stroke: Omit<Stroke, "commitIndex" | "authorClientId">) => void;
@@ -94,7 +102,7 @@ export function CanvasBoard({ committedStrokes, onStrokeComplete, remoteClientId
     const x = e.clientX - r.left;
     const y = e.clientY - r.top;
     activeRef.current = {
-      strokeId: crypto.randomUUID(),
+      strokeId: createStrokeId(),
       color,
       width,
       points: [{ x, y }],
